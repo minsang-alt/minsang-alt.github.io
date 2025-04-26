@@ -78,7 +78,7 @@ static class MyTask implements Runnable{
 }
 ```
 
-![](img_2.png)
+![](/assets/img/volatile/img_2.png)
 
 **정리**
 

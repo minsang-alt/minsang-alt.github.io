@@ -183,5 +183,5 @@ mem to mem의 동기화 과정입니다.
 
 ## Reference
 
-[Redis 공식문서](http://redisgate.kr/redis/configuration/replication.php)
+http://redisgate.kr/redis/configuration/replication.php
 

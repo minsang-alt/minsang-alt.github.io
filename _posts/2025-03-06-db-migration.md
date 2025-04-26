@@ -80,7 +80,7 @@ Issue 테이블이 에픽(Epic), 스토리(Story), 테스크(Task) 테이블의 
 - 계층 구조를 표현하기 위한 parent_issue_id 필드 추가: 이 필드를 통해 Epic-Story-Task 간의 관계를 유지. 
 - Epic은 null 값을, Story는 연관된 Epic의 ID를, Task는 연관된 Story의 ID를 저장하도록 설계
 
-<img src="/assets/img/db-migration/image%20copy.png" width="300" height="400">
+<img src="/assets/img/db-migration/image%20copy.png" width="300" height="400" alt="DB Migration 이미지 설명">
 
 이 구조는 다음과 같은 이점을 제공했습니다
 
