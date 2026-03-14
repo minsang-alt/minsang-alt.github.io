@@ -2,7 +2,7 @@
 title: 동시성 컬렉션
 date: 2024-09-13 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: thread    # TAG names should always be lowercase
+tags: [java, thread, collection, concurrency]
 ---
 
 컬렉션 프레임워크는 원자적인 연산이 아니고 여러 연산이 들어가 있기 때문에 멀티 스레드 상황에서 문제가 생깁니다. 따라서 동시성 컬렉션을 만들기 위해

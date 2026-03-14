@@ -2,7 +2,7 @@
 title: 동기 API를 Kafka 비동기 처리로 마이그레이션하기
 date: 2026-01-02 10:19:10 +/-0800
 categories: [Tech Notes, Kafka]
-tags: kafka
+tags: [kafka, async, spring]
 ---
 
 리뷰 복사 기능은 상위리뷰 데이터를 그대로 복사하는 기능으로, 데이터 양에 따라 최대 2시간 이상 소요되는 무거운 작업이에요. 이 기능을 동기 API에서 Kafka 기반 비동기 처리로 마이그레이션한 과정을 공유합니다.

@@ -2,7 +2,7 @@
 title: Redis Replication 기본 개념
 date: 2024-11-24 10:19:10 +/-0800
 categories: [Tech Notes, Redis]
-tags: redis    # TAG names should always be lowercase
+tags: [redis, replication]
 ---
 
 **Redis 버전 7.0.15 기준으로 설명합니다.** 

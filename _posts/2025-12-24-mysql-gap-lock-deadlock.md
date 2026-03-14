@@ -1,315 +1,382 @@
 ---
-title: MySQL Gap Lock 데드락. 원인 분석과 해결 방법
+title: MySQL Gap Lock 데드락. 가설 반증과 격리 수준 변경으로 해결
 date: 2025-12-24 10:19:10 +/-0800
-categories: [MySQL]
-tags: mysql
+categories: [Tech Notes, MySQL]
+tags: [mysql, deadlock, gap-lock, isolation-level]
 ---
 
 ## TL;DR
 
-- 서로 다른 트랜잭션이 Unique Key 인덱스의 **같은 갭**에 INSERT하면 데드락이 발생한다.
-- Gap Lock끼리는 호환되지만, Insert Intention Lock과는 충돌한다.
-- 해결책은 **분산 락으로 직렬화**하거나 **READ COMMITTED 격리 수준**을 사용하는 것이다.
+Kafka 컨슈머들이 동일 테이블에 DELETE + INSERT를 병렬로 수행하면서 **REPEATABLE READ의 gap lock** 때문에 데드락이 발생했다.
+
+처음에는 서브쿼리가 원인이라고 판단했다. 하지만 `performance_schema.data_locks`로 실제 락을 비교한 결과, **서브쿼리 제거는 효과가 없었다**. 근본 원인은 격리 수준 자체였고, **READ COMMITTED**로 변경하여 해결했다.
 
 ---
 
-## 문제 상황
+## 1. 문제 현황
 
-운영 환경에서 다음과 같은 데드락이 발생했다.
+### 증상
+
+- **에러**: `CannotAcquireLockException: Deadlock found when trying to get lock; try restarting transaction`
+- **발생 위치**: `ReviewSubGroupUserCalculationPointBulkRepository.processChunk():43` (INSERT)
+- **발생 빈도**: 2025년 12월 15일부터 거의 매일 반복
+- **영향**: Kafka 이벤트(`CalculateOverallGradeEvent`) 처리 실패 → 종합등급 계산 중단
+
+### 아키텍처 흐름
+
+```
+Kafka Consumer (CalculateOverallGradeEventHandler)
+  └─ @Transactional
+       ├─ 1. deleteExistingPoints(reviewGroup)     ← DELETE
+       ├─ 2. calculateOverallGrade(reviewGroup)     ← INSERT (BulkInsert)
+       └─ 3. markComplete()
+```
+
+각 컨슈머는 **서로 다른 ReviewGroup**을 처리하지만, 모두 같은 테이블에 DELETE + INSERT를 수행한다.
+
+### 테이블 구조
 
 ```sql
--- TX A
-INSERT INTO user_score
-  (user_id, ...)
-VALUES (765331, ...), (765332, ...);
-
--- TX B
-INSERT INTO user_score
-  (user_id, ...)
-VALUES (765326, ...), (765327, ...), (765328, ...), (765329, ...), (765330, ...);
+CREATE TABLE review_sub_group_user_calculation_point (
+  id bigint NOT NULL AUTO_INCREMENT,
+  review_sub_group_user_id bigint,       -- UNIQUE KEY
+  numerator decimal(38,0) NOT NULL,
+  denominator decimal(38,0) NOT NULL,
+  ...
+  PRIMARY KEY (id),
+  UNIQUE KEY UK_oahu5r (review_sub_group_user_id),   -- ★ 핵심 인덱스
+  KEY FK5h2bd (overall_grade_id)
+);
 ```
 
-두 트랜잭션은 서로 다른 그룹의 점수를 계산한다. 삽입하는 `user_id`도 다르다. 그런데 데드락이 발생했다.
+`review_sub_group_user_id`의 **UNIQUE KEY**가 이후 gap lock 분석의 핵심이 된다.
 
 ---
 
-## 데드락 로그 분석
+## 2. 초기 가설: 서브쿼리가 원인?
 
-MySQL의 `SHOW ENGINE INNODB STATUS` 출력 중 핵심 부분을 살펴보자.
+### 가설
+
+서브쿼리가 불필요한 gap lock을 유발한다고 판단했다. 서브쿼리를 제거하고 리터럴 IN절로 바꾸면 데드락이 해결될 것이라고 예상했다.
+
+**기존 쿼리**
+
+```sql
+DELETE FROM review_sub_group_user_calculation_point p
+WHERE p.review_sub_group_user_id IN (
+    SELECT rsgu.id
+    FROM review_sub_group_user rsgu
+    JOIN review_sub_group rsg ON rsgu.sub_group_id = rsg.id
+    WHERE rsg.review_group_id = ?
+)
+```
+
+**변경 쿼리** (서브쿼리 제거)
+
+```sql
+-- Step 1: Java에서 ID 조회
+SELECT rsgu.id FROM review_sub_group_user rsgu WHERE ...
+
+-- Step 2: 리터럴 IN절 DELETE
+DELETE FROM review_sub_group_user_calculation_point p
+WHERE p.review_sub_group_user_id IN (450800, 450801, 450802, ...)
+```
+
+### EXPLAIN 분석
 
 ```
-*** (1) HOLDS THE LOCK(S):
-RECORD LOCKS space id 1151 page no 1740 n bits 776
-index UK_user_id
-lock_mode X locks gap before rec
-
-*** (1) WAITING FOR THIS LOCK TO BE GRANTED:
-lock_mode X locks gap before rec insert intention waiting
+테이블                                          | type    | key
+review_sub_group (rsg)                          | ref     | ix_unique_review_sub_name
+review_sub_group_user (rsgu)                    | ref     | FKhkw0i6oid0tg9546898y1kvw5
+review_sub_group_user_calculation_point (p)     | eq_ref  | UK_oahu5r (UNIQUE KEY)
 ```
 
-| 키워드 | 의미 |
-|--------|------|
-| `UK_xxxx...` | `user_id` Unique Key 인덱스 |
-| `locks gap before rec` | 특정 레코드 직전의 갭에 락 |
-| `insert intention waiting` | INSERT를 위한 락 대기 중 |
-
-두 트랜잭션 모두 **같은 갭**에 Gap Lock을 보유하면서, **같은 갭**에 Insert Intention Lock을 요청하고 있다.
+`review_sub_group_user_calculation_point`는 **eq_ref**(UNIQUE KEY 포인트 룩업)로 접근한다. MySQL 공식 문서에 따르면 eq_ref는 **record lock만 사용하고 gap lock을 걸지 않는다**. 이 분석 결과만 보면 gap lock이 발생할 이유가 없었고, 실제로 로컬에서 데드락이 재현되지 않았다.
 
 ---
 
-## Gap Lock이란?
+## 3. 가설 반증: `performance_schema.data_locks` 실험
 
-InnoDB는 REPEATABLE READ 격리 수준에서 Phantom Read를 방지하기 위해 Gap Lock을 사용한다.
+### 실험 방법
 
-### Gap Lock의 범위
+트랜잭션을 커밋하지 않은 상태에서 `performance_schema.data_locks`를 조회하여 실제 락을 비교했다.
 
-Gap Lock은 인덱스 레코드 **사이의 빈 공간**을 잠근다.
+### 실험 1: 서브쿼리 DELETE의 락
 
-```
-인덱스 상태:
-┌───────┬───────┬───────────────────────┬───────┐
-│  100  │  200  │        [GAP]          │  700  │
-└───────┴───────┴───────────────────────┴───────┘
-                ↑                       ↑
-                301~699는 존재하지 않음
-                이 구간 전체가 하나의 "갭"
-
-INSERT 400 → 700 직전 갭에 락 필요
-INSERT 500 → 700 직전 갭에 락 필요 (같은 갭!)
-INSERT 600 → 700 직전 갭에 락 필요 (같은 갭!)
+```sql
+SET autocommit = 0;
+DELETE FROM review_sub_group_user_calculation_point
+WHERE review_sub_group_user_id IN (
+    SELECT rsgu.id FROM review_sub_group_user rsgu
+    JOIN review_sub_group rsg ON rsgu.sub_group_id = rsg.id
+    WHERE rsg.review_group_id = 372517
+);
+-- 4901건 삭제, 커밋하지 않고 data_locks 조회
 ```
 
-### 락 호환성
+**결과**:
 
-| | Gap Lock | Insert Intention Lock |
-|---|:---:|:---:|
-| **Gap Lock** | O | X |
-| **Insert Intention Lock** | X | O |
+| 테이블 | 인덱스 | LOCK_TYPE | LOCK_MODE | 건수 |
+| --- | --- | --- | --- | --- |
+| rsgucp | (TABLE) | TABLE | IX | 1 |
+| rsgucp | UK_oahu5r | RECORD | **X,GAP** | 1 |
+| rsgu | FKhkw0i | RECORD | S | 4908 |
+| rsgu | FKhkw0i | RECORD | S,GAP | 1 |
+| rsg | ix_unique | RECORD | S | 1 |
 
-Gap Lock끼리는 호환된다. 여러 트랜잭션이 같은 갭에 Gap Lock을 동시에 보유할 수 있다.
+### 실험 2: 리터럴 IN절 DELETE의 락
 
-하지만 Gap Lock과 Insert Intention Lock은 충돌한다. Gap Lock을 보유한 상태에서 다른 트랜잭션의 Insert Intention Lock 요청을 막는다.
+```sql
+SET autocommit = 0;
+DELETE FROM review_sub_group_user_calculation_point
+WHERE review_sub_group_user_id IN (450800, 450801, ..., 450820);
+-- 20건 삭제, 커밋하지 않고 data_locks 조회
+```
 
-Gap Lock은 Primary Key뿐만 아니라 Secondary Index에도 동일하게 사용된다는 것도 기억해 두도록 하자.
+**결과**
+
+| 테이블 | 인덱스 | LOCK_TYPE | LOCK_MODE | 건수 |
+| --- | --- | --- | --- | --- |
+| rsgucp | (TABLE) | TABLE | IX | 1 |
+| rsgucp | UK_oahu5r | RECORD | **X,GAP** | 1 |
+
+### 핵심 발견
+
+두 방식 모두 대상 테이블의 UNIQUE 인덱스에 **동일한 X,GAP 락**을 건다.
+
+유일한 차이는 서브쿼리 방식이 `rsgu` 테이블에 추가 공유 락(S lock)을 거는 것뿐이다. 이 락은 데드락과 무관하다.
+
+> 서브쿼리를 제거해도 데드락은 해결되지 않는다.
 
 ---
 
-## 데드락 발생 원리
+## 4. 실제 데드락 재현
 
-### 인덱스 상태
+### 재현 조건: 인터리브된 ID
 
-```
-UK 인덱스: user_id
-
-... ── 765325 ══════════ [GAP] ══════════ 765333 ── ...
-                ↑                    ↑
-         TX B: 765326~330     TX A: 765331~332
-                └────────────────────┘
-                     같은 갭!
-```
-
-765326부터 765332까지의 ID는 아직 존재하지 않는다. 다음으로 존재하는 레코드는 765333이다. 따라서 모든 INSERT는 **765333 직전의 갭**을 대상으로 한다.
-
-### 데드락 로그에서 갭 위치 확인하기
-
-데드락 로그의 hex 값을 해석하면 정확히 어떤 레코드 직전의 갭인지 알 수 있다.
+로컬에서 재현되지 않은 이유가 있었다. **테스트 데이터의 rsgu_id가 ReviewGroup별로 연속**되어 있었기 때문이다.
 
 ```
-Record lock, heap no 698 PHYSICAL RECORD: n_fields 2; compact format; info bits 0
-0: len 8; hex 80000000000bad95; asc         ;;
-1: len 8; hex 800000000003c59b; asc         ;;
+ReviewGroup A의 rsgu_id: 433321 ~ 438220  (연속)
+ReviewGroup B의 rsgu_id: 450800 ~ 455701  (연속)
+→ ID 범위가 겹치지 않음 → gap lock 범위가 겹치지 않음 → 데드락 불가
 ```
 
-| 필드 | Hex 값 | 변환 | 의미 |
-|------|--------|------|------|
-| 0 | `80000000000bad95` | 765333 | UK 인덱스 값 (다음 레코드) |
-| 1 | `800000000003c59b` | 247195 | PK 값 (해당 레코드의 id) |
-
-**Hex 변환 방법**: `0x80000000000bad95`에서 최상위 비트(부호 비트)를 제거하면 `0x0bad95` = 765333
-
-이 로그는 **765333 직전의 갭**에 Gap Lock이 걸려있음을 보여준다. TX A와 TX B 모두 이 갭에 INSERT하려고 했기 때문에 데드락이 발생했다.
-
-### 시간 순서
+하지만 프로덕션에서는 여러 ReviewGroup에 사용자가 시간 순서대로 추가된다. 전역 AUTO_INCREMENT로 ID가 발급되므로 **ReviewGroup 간 ID가 인터리브**된다
 
 ```
-T1: TX B - Gap Lock 획득 (765333 직전)
-T2: TX A - Gap Lock 획득 (765333 직전) ← Gap Lock끼리 호환되므로 성공
-T3: TX A - Insert Intention Lock 요청 → TX B의 Gap Lock과 충돌 → 대기
-T4: TX B - Insert Intention Lock 요청 → TX A의 Gap Lock과 충돌 → 대기
-T5: DEADLOCK!
+ReviewGroup A의 rsgu_id: 1, 3, 5, 7, 9, 11, ...  (홀수)
+ReviewGroup B의 rsgu_id: 2, 4, 6, 8, 10, 12, ...  (짝수)
+→ ID 범위가 완전히 겹침 → gap lock 충돌 가능
 ```
 
+### 인터리브 테스트 데이터 생성
+
+```sql
+-- ReviewGroup A (sub_group 24704) → 홀수 ID
+INSERT INTO review_sub_group_user (id, sub_group_id, user_id) VALUES
+  (700001, 24704, 1), (700003, 24704, 1), ..., (700019, 24704, 1);
+
+-- ReviewGroup B (sub_group 31494) → 짝수 ID
+INSERT INTO review_sub_group_user (id, sub_group_id, user_id) VALUES
+  (700002, 31494, 1), (700004, 31494, 1), ..., (700020, 31494, 1);
+
+-- 양쪽 모두 calculation_point 생성
+INSERT INTO review_sub_group_user_calculation_point
+  (review_sub_group_user_id, numerator, denominator, is_excluded_from_rating) VALUES
+  (700001, 100, 100, 0), (700002, 100, 100, 0), ..., (700020, 100, 100, 0);
 ```
-     TX A                              TX B
-      │                                 │
-      ▼                                 ▼
-┌───────────┐                    ┌───────────┐
-│ Gap Lock  │◄─── 호환 OK ──────► │ Gap Lock  │
-│  (보유)    │                    │  (보유)    │
-└─────┬─────┘                    └─────┬─────┘
-      │                                │
-      │ Insert Intention               │ Insert Intention
-      │ Lock 요청                       │ Lock 요청
-      ▼                                ▼
-┌───────────┐                    ┌───────────┐
-│   대기     │◄───── 충돌! ──────► │   대기      │
-└───────────┘                    └───────────┘
-              💀 DEADLOCK
+
+### 동시 세션 데드락 재현
+
+```
+Session A (ReviewGroup A - 홀수)              Session B (ReviewGroup B - 짝수)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+① BEGIN
+   DELETE ... WHERE rsgu_id IN
+   (700001,700003,...,700019)
+   → 삭제된 레코드에 X lock
+   → 인접 gap에 X,GAP lock 획득
+                                           ② BEGIN (0.5초 후)
+                                              DELETE ... WHERE rsgu_id IN
+                                              (700002,700004,...,700020)
+                                              → 삭제된 레코드에 X lock
+                                              → 인접 gap에 X,GAP lock 획득
+
+③ INSERT (2초 후)                           ④ INSERT (1.5초 후)
+   (700001,700003,...,700019)                  (700002,700004,...,700020)
+   → Insert Intention Lock 필요               → Insert Intention Lock 필요
+   → Session B의 gap lock과 충돌! ⏸️          → Session A의 gap lock과 충돌! ⏸️
+
+                    💥 DEADLOCK DETECTED!
+```
+
+### 재현 결과
+
+**REPEATABLE READ (기본)** — 리터럴 IN절 DELETE:
+
+```
+Round 1: DEADLOCK
+Round 2: DEADLOCK
+Round 3: OK
+Round 4: DEADLOCK
+Round 5: OK
+결과: 3/5 데드락 발생
+```
+
+**REPEATABLE READ (기본)** — 서브쿼리 DELETE:
+
+```
+결과: 동일하게 데드락 발생
+```
+
+> **서브쿼리든 리터럴 IN이든 상관없이 데드락이 발생한다.**
+
+---
+
+## 5. InnoDB 데드락 로그 분석
+
+재현에 성공한 후 `SHOW ENGINE INNODB STATUS`로 데드락 로그를 확인했다
+
+```
+*** (1) TRANSACTION: (TxB - 짝수 INSERT)
+HOLDS THE LOCK(S):
+  index UK_oahu5r  lock mode S locks gap before rec
+  → rsgu_id=700003 앞의 gap에 S,GAP lock 보유
+
+WAITING FOR THIS LOCK TO BE GRANTED:
+  index UK_oahu5r  lock_mode X locks gap before rec insert intention waiting
+  → rsgu_id=700003 위치에 INSERT 시도 → Insert Intention Lock 대기
+
+*** (2) TRANSACTION: (TxA - 홀수 INSERT)
+HOLDS THE LOCK(S):
+  index UK_oahu5r  lock_mode X locks gap before rec
+  → 여러 위치에 X,GAP lock 보유
+
+WAITING FOR THIS LOCK TO BE GRANTED:
+  insert intention waiting
+  → 다른 위치에 INSERT 시도 → TxB의 gap lock과 충돌
+```
+
+### 데드락 메커니즘 정리
+
+```
+Gap Lock과 Insert Intention Lock의 비호환성:
+
+┌──────────────────────────────────────────────────────┐
+│  Gap Lock (X,GAP / S,GAP)                            │
+│  → "이 범위에 아무도 INSERT하지 마라"                    │
+│                                                      │
+│  Insert Intention Lock                               │
+│  → "이 위치에 INSERT하겠다"                             │
+│                                                      │
+│  ★ 이 두 락은 서로 호환되지 않는다 (MySQL 공식 문서)      │
+│  → Gap Lock이 걸린 범위에 INSERT 시도 시 대기 발생       │
+│  → 양방향으로 대기하면 DEADLOCK                         │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 해결 방법
+## 6. 근본 원인
 
-### 방법 1: 분산 락으로 직렬화
+근본 원인은 서브쿼리가 아니다. **REPEATABLE READ 격리 수준에서 DELETE가 거는 gap lock**이 원인이다.
 
-동시 실행 자체를 막는다.
+| 요소 | 설명 |
+| --- | --- |
+| **격리 수준** | REPEATABLE READ → DELETE 시 gap lock 획득 |
+| **인덱스 구조** | `review_sub_group_user_id`에 UNIQUE KEY |
+| **데이터 분포** | 서로 다른 ReviewGroup의 rsgu_id가 전역 AUTO_INCREMENT로 인터리브 |
+| **동시성** | Kafka 컨슈머가 서로 다른 ReviewGroup을 병렬 처리 |
+| **작업 패턴** | 같은 트랜잭션 내에서 DELETE → INSERT (같은 rsgu_id 재삽입) |
+
+### 서브쿼리 제거가 효과 없는 이유
+
+1. UNIQUE 인덱스의 eq_ref 접근은 서브쿼리 유무와 무관하게 **동일한 gap lock**을 건다
+2. `performance_schema.data_locks` 비교 결과, 두 방식 모두 `X,GAP` 패턴이 동일하다
+3. 인터리브 데이터로 테스트하면 두 방식 모두 같은 빈도로 데드락이 발생한다
+
+---
+
+## 7. 해결: READ COMMITTED 격리 수준
+
+### READ COMMITTED에서 gap lock이 사라지는 이유
+
+MySQL 공식 문서는 READ COMMITTED의 락 동작을 다음과 같이 설명한다:
+
+> "For locking reads, UPDATE statements, and DELETE statements, InnoDB locks only index records, not the gaps before them, and thus permits the free insertion of new records next to locked records. **Gap locking is only used for foreign-key constraint checking and duplicate-key checking.**"
+>
+> — [InnoDB Transaction Isolation Levels](https://dev.mysql.com/doc/refman/9.1/en/innodb-transaction-isolation-levels.html)
+
+|  | REPEATABLE READ | READ COMMITTED |
+| --- | --- | --- |
+| DELETE 시 gap lock | O (Phantom Read 방지) | **X** (record lock만) |
+| INSERT intention lock 충돌 | O (gap lock과 비호환) | **X** (gap lock 없으므로) |
+| 데드락 가능성 | **높음** | **낮음** |
+
+### 검증 실험
+
+**READ COMMITTED** — 동일한 인터리브 테스트 데이터:
+
+```
+Round 1: OK
+Round 2: OK
+Round 3: OK
+Round 4: OK
+Round 5: OK
+결과: 0/5 데드락 발생
+```
+
+### 코드 변경
 
 ```java
-@Component
-@RequiredArgsConstructor
-public class CalculationPointService {
+// CalculateOverallGradeEventHandler.java
+@Transactional(isolation = Isolation.READ_COMMITTED)  // 변경
+@KafkaHandler
+public void handle(final CalculateTotalOverallGradeEvent event) { ... }
 
-    private final RedissonClient redissonClient;
+@Transactional(isolation = Isolation.READ_COMMITTED)  // 변경
+@KafkaHandler
+public void handle(final CalculateOverallGradeEvent event) { ... }
 
-    public void saveCalculationPoints(List<Point> points) {
-        RLock lock = redissonClient.getLock("calculation-point-lock");
+// OverallGradeCalculationService.java
+@Transactional(isolation = Isolation.READ_COMMITTED)  // 변경
+public void calculateOverallGrade(long reviewGroupId) { ... }
 
-        try {
-            if (lock.tryLock(10, 60, TimeUnit.SECONDS)) {
-                repository.saveAll(points);
-            }
-        } finally {
-            if (lock.isHeldByCurrentThread()) {
-                lock.unlock();
-            }
-        }
-    }
-}
+@Transactional(isolation = Isolation.READ_COMMITTED)  // 변경
+public void calculateOverallGrade(OverallGradeCalculationInfo request, ...) { ... }
 ```
 
-**장점**: 데드락 완전 방지
+변경 범위는 **2개 파일, 4개 메서드**다. `@Transactional`의 isolation 속성만 수정했고, 비즈니스 로직은 건드리지 않았다.
 
-**단점**: 처리량 감소
+### READ COMMITTED 사용 시 고려사항
 
-```
-분산 락 없이 (병렬 처리):
-┌─────────────────────────────────────────────────────────┐
-│ 시간 →                                                  │
-│                                                         │
-│ TX A: ████████████                                      │
-│ TX B:     ████████████                                  │
-│ TX C:         ████████████                              │
-│                                                         │
-│ → 동시에 여러 트랜잭션 실행 (빠름)                        │
-│ → 단, 같은 갭에서 데드락 가능                            │
-└─────────────────────────────────────────────────────────┘
-
-분산 락 적용 (직렬화):
-┌─────────────────────────────────────────────────────────┐
-│ 시간 →                                                  │
-│                                                         │
-│ TX A: ████████████                                      │
-│ TX B:             ████████████                          │
-│ TX C:                         ████████████              │
-│                                                         │
-│ → 한 번에 하나씩만 실행 (느림)                           │
-│ → 데드락 없음                                           │
-└─────────────────────────────────────────────────────────┘
-```
-
-트래픽이 많을 때 병목이 될 수 있다.
-
-지금 상황에서는 그룹마다 계산 로직이 수행되는 시간이 매우 길기 때문에, 적합한 선택이 아니다. 
-
-### 방법 2: READ COMMITTED 격리 수준
-
-Gap Lock을 사용하지 않도록 격리 수준을 READ COMMITTED로 낮춘다.
-
-```java
-@Transactional(isolation = Isolation.READ_COMMITTED)
-public void saveCalculationPoints(List<Point> points) {
-    bulkRepository.saveAllInBulk(points);
-}
-```
-
-**장점**: 동시성 유지. Gap Lock이 발생하지 않아 데드락 가능성이 낮아진다.
-
-**단점**: Phantom Read가 발생할 수 있다.
-
-### REPEATABLE READ vs READ COMMITTED
-
-| 격리 수준 | INSERT 시 락 | Phantom Read |
-|-----------|-------------|--------------|
-| REPEATABLE READ | Gap Lock + Record Lock | 방지 |
-| READ COMMITTED | Record Lock만 | 발생 가능 |
-
-### Phantom Read가 문제되지 않는 경우
-
-다음과 같은 패턴에서는 READ COMMITTED를 안전하게 사용할 수 있다.
-
-```java
-@Transactional(isolation = Isolation.READ_COMMITTED)
-public void calculateScore(Long groupId) {
-    // 1. 기존 데이터 삭제
-    bulkRepository.deleteByGroupId(groupId);
-
-    // 2. 새로 계산해서 INSERT
-    List<Score> scores = calculate();
-    bulkRepository.saveAllInBulk(scores);
-
-    // 같은 데이터를 두 번 조회하지 않으므로
-    // Phantom Read 영향 없음
-}
-```
-
-### 방법 3: 현행 유지 + 재시도에 의존
-
-데드락이 모니터링으로 감지되고 있고, 자주 발생하지는 않는다.
-
-주로 하나의 고객사에서 2개 이상의 그룹을 거의 동시에 종료했을 때 발생한다.
-
-데드락이 발생하면 MySQL은 하나의 트랜잭션을 롤백하고, 다른 트랜잭션은 커밋시킨다.
-
-롤백된 트랜잭션은 카프카 컨슈머에서 실행되므로, 카프카가 자동으로 재시도한다.
-
-```
-메시지 처리 실패
-    ↓
-재시도 실패 시 RETRY 토픽으로 이동
-    ↓
-최종 실패 시 DLT(Dead Letter Topic)로 이동
-```
-
+| 항목 | 영향 |
+| --- | --- |
+| Phantom Read | 같은 ReviewGroup을 동시에 처리하지 않으므로 영향 없음 |
+| Non-repeatable Read | DELETE → INSERT를 한 트랜잭션에서 순차 실행하므로 영향 없음 |
+| FK 제약조건 | READ COMMITTED에서도 FK 체크 시 gap lock은 유지된다 (MySQL 보장) |
+| 성능 | gap lock이 사라지면서 동시성이 향상된다 |
 
 ---
 
-## 최종 결정: 방법 2
+## 8. 실험 결과 요약
 
-최근 고객사에서 Open API를 활용해 여러 그룹을 동시에 종료하는 경우가 잦아졌다.
+| # | 테스트 | 격리 수준 | DELETE 방식 | 데드락 |
+| --- | --- | --- | --- | --- |
+| 1 | 서브쿼리 DELETE | REPEATABLE READ | 서브쿼리 | **발생** |
+| 2 | 리터럴 IN DELETE | REPEATABLE READ | 리터럴 IN | **발생 (3/5)** |
+| 3 | 리터럴 IN DELETE | **READ COMMITTED** | 리터럴 IN | **없음 (0/5)** |
 
-데드락 알림이 빈번해지고, 매번 점수가 제대로 계산됐는지 확인하는 절차가 번거로워졌다. 격리 수준을 낮추고 현황을 지켜보기로 했다.
-
-```java
-@Repository
-public class UserScoreBulkRepository {
-    @Transactional(isolation = Isolation.READ_COMMITTED)
-    public void saveAllInBulk(List<UserScore> scores) {
-        // bulk insert 로직
-    }
-}
-```
+> **DELETE 방식(서브쿼리 vs IN절)은 데드락과 무관하다.** 격리 수준을 REPEATABLE READ에서 READ COMMITTED로 바꾸는 것이 유일한 해결책이었다.
 
 ---
 
-## 정리
+## 참고 문서
 
-| 항목 | 내용 |
-|------|------|
-| **원인** | 같은 갭에 Gap Lock을 보유한 상태에서 Insert Intention Lock 상호 대기 |
-| **조건** | REPEATABLE READ + Unique Key + 인접한 ID에 동시 INSERT |
-| **해결책 1** | 분산 락으로 직렬화 |
-| **해결책 2** | READ COMMITTED로 Gap Lock 제거 |
-| **해결책 3** | 현행 유지 + 카프카 재시도에 의존 |
-
-Gap Lock 데드락은 **인접한 ID**를 **동시에 INSERT**할 때 발생한다. AUTO_INCREMENT를 사용하는 테이블에서 벌크 INSERT가 많다면, 격리 수준을 READ COMMITTED로 낮추는 것을 검토하자.
+- [MySQL InnoDB Locking](https://dev.mysql.com/doc/refman/9.1/en/innodb-locking.html)
+- [InnoDB Gap Locks](https://dev.mysql.com/doc/refman/9.1/en/innodb-locking.html#innodb-gap-locks)
+- [Locks Set by Different SQL Statements](https://dev.mysql.com/doc/refman/9.1/en/innodb-locks-set.html)
+- [InnoDB Transaction Isolation Levels](https://dev.mysql.com/doc/refman/9.1/en/innodb-transaction-isolation-levels.html)
+- [MySQL performance_schema.data_locks](https://dev.mysql.com/doc/refman/8.0/en/performance-schema-data-locks-table.html)

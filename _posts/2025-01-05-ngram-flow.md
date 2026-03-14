@@ -2,7 +2,7 @@
 title: MySQL Full-Text Ngram Parser (3)
 date: 2025-01-05 15:19:10 +/-0800
 categories: [Tech Notes, MySQL]
-tags: mysql    # TAG names should always be lowercase
+tags: [mysql, fulltext, ngram]
 ---
 
 ### Step1. ngram parser로 문서 토큰화

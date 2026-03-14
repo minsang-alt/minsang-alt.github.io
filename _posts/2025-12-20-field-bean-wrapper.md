@@ -1,8 +1,8 @@
 ---
 title: 런타임 필드 접근이 필요할 때, BeanWrapper를 고려해보자
 date: 2025-12-20 10:19:10 +/-0800
-categories: [Spring]
-tags: objectmapper, spring    # TAG names should always be lowercase
+categories: [Tech Notes, Spring]
+tags: [spring, beanwrapper, reflection]
 ---
 
 문자열 키("korName")로 객체의 프로퍼티 값을 가져와야 한다면, 어떻게 하시겠어요? 리플렉션? ObjectMapper?

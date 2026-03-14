@@ -2,7 +2,7 @@
 title: spring에서 MySQL의 master/slave 구성하기
 date: 2024-09-22 10:19:10 +/-0800
 categories: [Tech Notes, Spring]
-tags: spring    # TAG names should always be lowercase
+tags: [spring, mysql, replication]
 ---
 
 ### 0. 실행 환경

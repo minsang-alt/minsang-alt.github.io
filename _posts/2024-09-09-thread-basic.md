@@ -2,7 +2,7 @@
 title: Thread 기본구현과 상태
 date: 2024-09-09 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: thread    # TAG names should always be lowercase
+tags: [java, thread]
 ---
 
 ## 스레드를 생성하는 방법 2가지

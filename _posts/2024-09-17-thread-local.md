@@ -2,7 +2,7 @@
 title: ThreadLocal
 date: 2024-09-17 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: thread    # TAG names should always be lowercase
+tags: [java, thread, threadlocal]
 ---
 
 ## 스레드로컬이 뭔가요?

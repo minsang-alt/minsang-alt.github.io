@@ -2,7 +2,7 @@
 title: 커넥션 풀 고갈 문제를 Redis Atomic 연산으로 개선하기
 date: 2024-12-11 15:19:10 +/-0800
 categories: [Project Insights, AgileHub]
-tags: project    # TAG names should always be lowercase
+tags: [project, redis, connection-pool]
 ---
 
 ### 장애 상황

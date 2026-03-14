@@ -2,7 +2,7 @@
 title: DB 설계 개선으로 끌어올린 코드 품질과 유지보수성
 date: 2025-03-06 15:19:10 +/-0800
 categories: [Project Insights, AgileHub]
-tags: project    # TAG names should always be lowercase
+tags: [project, database, refactoring]
 ---
 
 ### 리팩토링을 시작하게 된 배경

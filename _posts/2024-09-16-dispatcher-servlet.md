@@ -2,7 +2,7 @@
 title: 디스패처 서블릿. 코드와 함께 이해하기
 date: 2024-09-16 10:19:10 +/-0800
 categories: [Tech Notes, Spring]
-tags: spring    # TAG names should always be lowercase
+tags: [spring, spring-mvc, servlet]
 ---
 
 클라이언트에서 처음 Swagger 페이지를 GET 요청했을 때 흐름을 적었습니다.

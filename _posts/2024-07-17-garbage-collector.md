@@ -2,7 +2,7 @@
 title: JVM Garbage Collection (1)
 date: 2024-04-17 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: jvm     # TAG names should always be lowercase
+tags: [jvm, gc]
 ---
 
 ## JVM 개요

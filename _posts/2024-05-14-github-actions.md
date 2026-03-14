@@ -2,7 +2,7 @@
 title: 배포 하는데 걸리던 시간 13분을 5분으로 줄이기
 date: 2024-05-14 15:19:10 +/-0800
 categories: [Project Insights, AgileHub]
-tags: project    # TAG names should always be lowercase
+tags: [project, ci/cd, github-actions]
 ---
 
 ### 문제사항

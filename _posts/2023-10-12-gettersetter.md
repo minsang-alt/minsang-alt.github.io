@@ -2,7 +2,7 @@
 title: '@GetterSetter을 만들어보자'
 date: 2023-10-12 15:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: java    # TAG names should always be lowercase
+tags: [java, annotation, reflection]
 ---
 
 ### 왜 @GetterSetter을 만들어보려 하나요?

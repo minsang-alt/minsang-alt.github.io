@@ -2,7 +2,7 @@
 title: JVM Garbage Collection (3)
 date: 2024-04-19 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: jvm     # TAG names should always be lowercase
+tags: [jvm, gc, young-generation]
 ---
 
 ## 약한 세대 가설 (Weak Generational Hypothesis)

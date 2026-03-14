@@ -2,7 +2,7 @@
 title: JVM Garbage Collection (2)
 date: 2024-04-18 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: jvm     # TAG names should always be lowercase
+tags: [jvm, gc, mark-sweep]
 ---
 
 **Mark and Sweep 알고리즘**은 Garbage Collection의 기본 알고리즘 입니다. JVM에서 사용되는 실제 알고리즘은 훨씬 복잡하지만 Mark & Sweep 알고리즘이 기반이므로 확실히 이해해야 합니다.

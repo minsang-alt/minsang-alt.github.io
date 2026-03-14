@@ -2,7 +2,7 @@
 title: Collections Framework
 date: 2024-08-03 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: java     # TAG names should always be lowercase
+tags: [java, collection]
 ---
 
 ## 컬렉션 프레임워크란 

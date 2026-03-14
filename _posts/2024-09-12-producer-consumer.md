@@ -2,7 +2,7 @@
 title: 생산자 소비자 문제
 date: 2024-09-12 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: thread    # TAG names should always be lowercase
+tags: [java, thread, concurrency]
 ---
 
 ## 생산자 소비자 문제란

@@ -2,7 +2,7 @@
 title: 장애에 대해 대처하는 방법
 date: 2025-08-23 10:19:10 +/-0800
 categories: [Retro, Company]
-tags: retrospective    # TAG names should always be lowercase
+tags: [retrospective, incident]
 ---
 
 ## 들어가며

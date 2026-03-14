@@ -2,7 +2,7 @@
 title: docker volume 제대로 설정하기
 date: 2024-05-09 15:19:10 +/-0800
 categories: [Project Insights, AgileHub]
-tags: project    # TAG names should always be lowercase
+tags: [project, docker]
 ---
 
 ### 문제 사항

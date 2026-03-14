@@ -2,7 +2,7 @@
 title: 500만 건 데이터의 페이징 API 성능 최적화
 date: 2024-09-23 15:19:10 +/-0800
 categories: [Project Insights, BookChallenge]
-tags: project    # TAG names should always be lowercase
+tags: [project, mysql, performance]
 ---
 
 ### 문제 사항 1. 책 조회 페이징 API (TPS 4.3)

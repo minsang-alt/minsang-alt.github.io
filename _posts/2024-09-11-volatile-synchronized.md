@@ -2,7 +2,7 @@
 title: 메모리 가시성과 동시성
 date: 2024-09-11 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: thread    # TAG names should always be lowercase
+tags: [java, thread, concurrency]
 ---
 
 ## 메모리 가시성이란

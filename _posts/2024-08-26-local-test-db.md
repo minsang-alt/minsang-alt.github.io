@@ -2,7 +2,7 @@
 title: 클라우드 환경에 내 로컬 DB 연결하기
 date: 2024-08-26 15:19:10 +/-0800
 categories: [Project Insights, BookChallenge]
-tags: project    # TAG names should always be lowercase
+tags: [project, database, networking]
 ---
 
 ### 문제 사항

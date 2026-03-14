@@ -2,7 +2,7 @@
 title: 왜 롤백이 되었을까
 date: 2025-09-07 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: incident    # TAG names should always be lowercase
+tags: [incident, spring, transaction]
 ---
 
 ### 문제 상황

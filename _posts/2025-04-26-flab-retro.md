@@ -2,7 +2,7 @@
 title: 에프랩(F-Lab) Java Backend 수료 후기
 date: 2025-04-27 10:19:10 +/-0800
 categories: [Retro, F-Lab]
-tags: flab    # TAG names should always be lowercase
+tags: [flab, retrospective]
 ---
 
 ### 6개월간의 취준 끝.

@@ -2,7 +2,7 @@
 title: JVM Garbage Collection (4)
 date: 2024-04-20 10:19:10 +/-0800
 categories: [Tech Notes, Java]
-tags: jvm     # TAG names should always be lowercase
+tags: [jvm, gc, g1gc]
 ---
 
 Old 영역은 기본적으로 데이터가 가득 차면 GC를 실행합니다. GC 방식은 `Serial GC`, `Parallel GC`,
